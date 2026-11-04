@@ -31,6 +31,7 @@
       <div><label class="lb">Prefactura / Nota de venta (PDF)</label><input type="file" accept=".pdf" class="in" onchange="onFile('pre',this)"><p id="s_pre" class="text-xs text-slate-500 mt-1"></p></div>
       <div><label class="lb">Comprobante de pago (PDF, JPG, PNG)</label><input type="file" accept=".pdf,.jpg,.jpeg,.png" class="in" onchange="onFile('pago',this)"><p id="s_pago" class="text-xs text-slate-500 mt-1"></p></div>
       <div><label class="lb">Hoja de entrega firmada (PDF, JPG, PNG)</label><input type="file" accept=".pdf,.jpg,.jpeg,.png" class="in" onchange="onFile('hoja',this)"><p id="s_hoja" class="text-xs text-slate-500 mt-1"></p></div>
+      <div><label class="lb">Factura de anticipo (opcional, PDF)</label><input type="file" accept=".pdf" class="in" onchange="onFile('fant',this)"><p id="s_fant" class="text-xs text-slate-500 mt-1"></p></div>
     </div>
     <div class="mt-4"><label class="lb">Endpoint de Google Apps Script (Web App URL) para validar duplicados</label>
       <div class="flex gap-2"><input id="gas" class="in" placeholder="https://script.google.com/macros/s/.../exec"><button class="btn bg-slate-700 text-white" onclick="validar()">Validar</button></div>
@@ -99,7 +100,19 @@ const clean=s=>String(s).replace(/[\\/:*?"<>|]/g,'').trim();
 
 async function pdfText(f){
   const d=await pdfjsLib.getDocument({data:await f.arrayBuffer()}).promise;let t='';
-  for(let i=1;i<=d.numPages;i++){const c=await(await d.getPage(i)).getTextContent();t+=c.items.map(x=>x.str).join(' ')+' ';}
+  for(let i=1;i<=d.numPages;i++){
+    const c=await(await d.getPage(i)).getTextContent(),seen={};let px=0,py=null,pw=0,out='';
+    for(const it of c.items){
+      const str=it.str;if(!str)continue;
+      const x=it.transform[4],y=it.transform[5],h=it.height||10;
+      const L=seen[str]||(seen[str]=[]);
+      if(L.some(q=>Math.abs(q[0]-x)<1.5&&Math.abs(q[1]-y)<1.5))continue;
+      L.push([x,y]);
+      if(py!==null){const gap=x-(px+pw),same=Math.abs(y-py)<h*0.5;if(!(same&&gap<h*0.12&&gap>-h*0.5))out+=' '}
+      out+=str;px=x;py=y;pw=it.width;
+    }
+    t+=out+' ';
+  }
   return t.replace(/[|]/g,' ').replace(/\s+/g,' ').trim();
 }
 
@@ -246,14 +259,56 @@ async function leerHoja(f){
   say('s_hoja',n?(partial?`Hoja leída: modelo y color detectados (${n}). La serie y el motor no se leyeron con claridad: captúralos o verifícalos en la tabla.`:`Hoja leída: ${n} unidad(es) con modelo/serie/motor. Revisa la tabla.`):'No se encontraron unidades en la hoja; captura los datos manualmente.',!n);
 }
 
+/* ---------- Factura de anticipo (opcional) ---------- */
+let FACT={};
+function parseFactAnt(t){
+  /* Algunos CFDI traen espacios dentro de las palabras: las etiquetas y códigos se buscan sin espacios */
+  const cp=x=>x.replace(/\s+/g,'').toUpperCase(),ct=cp(t);
+  const fm=ct.match(/FOLIO:([A-Z]{0,3})(\d{1,10})/);
+  const folio=fm?fm[1]+fm[2]:'';
+  const ri=t.search(/R\s*e\s*c\s*e\s*p\s*t\s*o\s*r\s*:/i);
+  const r=ri>=0?t.slice(ri).replace(/^[\s\S]*?:/,'').replace(/^\s*R\s*e\s*c\s*e\s*p\s*t\s*o\s*r\s*:/i,'').slice(0,800):'';
+  const rc=cp(r);
+  const reg=(rc.match(/R.GIMENFISCAL:(\d{3})/)||[])[1]||'';
+  const moral=['601','603','620','622','623','624','628'].includes(reg);
+  const mr=rc.slice(0,150).match(reg?new RegExp('([A-ZÑ&]{'+(moral?3:4)+'})(\\d{6}[A-Z0-9]{3})'):/([A-ZÑ&]{3,4})(\d{6}[A-Z0-9]{3})/);
+  const rfc=mr?mr[1]+mr[2]:'';
+  let razon='',fragmentado=false;
+  if(mr){
+    let n=0,i=0;while(i<r.length&&n<mr.index){if(/\S/.test(r[i]))n++;i++}
+    const nm=r.slice(0,i).replace(/\s+/g,' ').trim();
+    if(nm.split(' ').filter(w=>w.length===1).length>=2)fragmentado=true;else razon=nm;
+  }
+  const uso=(rc.match(/USODELCFDI:([A-Z]\d{2})/)||[])[1]||'';
+  const metodo=(ct.match(/M.TODODEPAGO:([A-Z]{3})/)||[])[1]||'';
+  let total=0;for(const m of ct.matchAll(/TOTAL:\$([\d,]+\.\d{2})/g))if(ct.slice(Math.max(0,m.index-3),m.index)!=='SUB')total=num(m[1]);
+  const fe=ct.match(/EMISI.N:(\d{2})\/(\d{2})\/(\d{4})/);
+  return {folio,rfc,razon,fragmentado,uso,reg,metodo,total,fecha:fe?`${fe[3]}-${fe[2]}-${fe[1]}`:'',anticipo:/ANTICIPO/i.test(t)};
+}
+function setSel(id,code){
+  const sel=$(id);if(!code||sel.value)return;
+  const o=[...sel.options].find(x=>x.value.trim().toUpperCase().startsWith(code.toUpperCase()));
+  if(o)sel.value=o.value;
+}
+async function leerFactAnt(f){
+  if(ext(f)!=='pdf'){say('s_fant','Archivo cargado; solo se lee automáticamente si es PDF. Se agregará al ZIP.');return}
+  const d=parseFactAnt(await pdfText(f));FACT=d;
+  if(!$('f_razon').value)$('f_razon').value=d.razon;
+  if(!$('f_rfc').value)$('f_rfc').value=d.rfc;
+  setSel('f_regimen',d.reg);setSel('f_uso',d.uso);setSel('f_metodo',d.metodo);
+  if(d.anticipo&&!$('pedido').value)$('pedido').value='ANTICIPO';
+  say('s_fant',`Factura ${d.folio||'(sin folio)'} leída${d.total?': '+money(d.total):''}. Completa solo los datos vacíos del cliente y se agregará al ZIP. No sustituye al comprobante de pago.`+(d.fragmentado?' El nombre no se pudo leer bien de este PDF: toma el de la CSF o captúralo.':''));
+}
+
 /* ---------- Archivos ---------- */
 async function onFile(k,el){
-  const f=el.files[0];if(!f){delete FILES[k];return}
+  const f=el.files[0];if(!f){delete FILES[k];if(k==='fant')FACT={};say('s_'+k,'');return}
   FILES[k]=f;say('s_'+k,f.name);
   try{
     if(k==='csf'&&ext(f)==='pdf'){parseCSF(await pdfText(f));say('s_csf','CSF leída. Revisa los campos.')}
     else if(k==='csf')say('s_csf','Imagen cargada: captura los datos fiscales manualmente.');
     if(k==='hoja')await leerHoja(f);
+    if(k==='fant')await leerFactAnt(f);
     if(k==='pago')await leerPago(f);
     if(k==='pre'){parsePre(await pdfText(f));say('s_pre',`Prefactura leída: ${V.length} unidad(es), ${P.length} pago(s).`+(P.length?'':' No trae líneas de pago: cárgalos desde el comprobante o captúralos.')+' Revisa las tablas.')}
   }catch(e){say('s_'+k,'No se pudo leer el archivo: '+e.message,1)}
@@ -349,6 +404,7 @@ async function descargar(){
     if(FILES.pre)dir.file(`Prefactura_${nota}.pdf`,FILES.pre);
     if(FILES.pago)dir.file(`ComprobantePago_${nota}.${ext(FILES.pago)}`,FILES.pago);
     if(FILES.hoja)dir.file(`HojaEntregaFirmada_${nota}.${ext(FILES.hoja)}`,FILES.hoja);
+    if(FILES.fant)dir.file(`FacturaAnticipo_${clean(FACT.folio||nota)}.${ext(FILES.fant)}`,FILES.fant);
     const xname=`FACTURACION_VENTA_DIARIA_${nota}.xlsx`;
     zip.file(xname,xl);
     const zn=zipName();save(await zip.generateAsync({type:'blob'}),zn.name);zn.commit();
