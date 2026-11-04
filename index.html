@@ -125,26 +125,75 @@ function parseCSF(t){
 /* ---------- Prefactura ---------- */
 const COL='(?:MORADO|VERDE OLIVO|VERDE|AZUL|ROJO|NEGRO|BLANCO|GRIS|NARANJA|AMARILLO|ROSA|PLATA|DORADO|CAFE|BEIGE|VINO|TURQUESA)';
 const COLRE=new RegExp(`\\b${COL}(?:\\s*/\\s*${COL})?\\b`,'i');
+const STOP='MARCA|MODELO|NIV|MOTOR|COLOR|WATTS|VOLTAJE|BATERIA|BATERÍA|ADUANA|FECHA PEDIMENTO';
+const lbl=(seg,n)=>{const m=seg.match(new RegExp('\\b'+n+'\\s*:\\s*(.+?)(?=\\s+(?:'+STOP+')\\s*:|$)','i'));return m?m[1].trim():''};
+let HOJA_TXT='';
 function parsePre(t){
   $('nota').value=(t.match(/\bS\d{4,6}\b/)||[''])[0];
-  P.length=0;
-  for(const m of t.matchAll(/Pagado el\s*(\d{2})\/(\d{2})\/(\d{4})\s*\$?\s*([\d,]+\.\d{2})/gi))P.push({fecha:`${m[3]}-${m[2]}-${m[1]}`,monto:num(m[4]),banco:''});
+  const pagos=[...t.matchAll(/Pagad[oa]\s+(?:el|en)?\s*(\d{2})\/(\d{2})\/(\d{4})\s*\$?\s*([\d,]+\.\d{2})/gi)].map(m=>({fecha:`${m[3]}-${m[2]}-${m[1]}`,monto:num(m[4]),banco:''}));
+  if(pagos.length){P.length=0;P.push(...pagos)}
   V.length=0;
-  const nv=[...t.matchAll(/\b[A-HJ-NPR-Z0-9]{17}\b/g)].filter(m=>/\d/.test(m[0])&&/[A-Z]/.test(m[0]));
+  let nv=[...t.matchAll(/\bNIV\s*:\s*([A-HJ-NPR-Z0-9]{17})\b/gi)].map(m=>{const x=[m[1].toUpperCase()];x.index=m.index+m[0].length-17;return x});
+  if(!nv.length)nv=[...t.matchAll(/\b[A-HJ-NPR-Z0-9]{17}\b/g)].filter(m=>/\d/.test(m[0])&&/[A-Z]/.test(m[0])&&!/MOTOR\s*:?\s*$/i.test(t.slice(Math.max(0,m.index-12),m.index)));
+  const money=[...t.matchAll(/\$\s?([\d,]+\.\d{2})/g)].filter(x=>!/Pagad[oa][^$]{0,25}$/i.test(t.slice(Math.max(0,x.index-40),x.index)));
   nv.forEach((m,i)=>{
-    const lo=Math.max(i?nv[i-1].index+17:0,m.index-300),hi=Math.min(i<nv.length-1?nv[i+1].index:t.length,m.index+317);
-    const seg=t.slice(lo,hi).split(/Pagado el/i)[0];
-    const price=(seg.match(/\$\s?([\d,]+\.\d{2})/)||[])[1];
-    const qty=(seg.match(/(\d+(?:\.\d+)?)\s*(?:Unidad|Unidades|Pza|Piezas?|Units?)/i)||[])[1];
-    const volt=(seg.match(/(\d{2,3})\s?V(?:olts?)?\b/i)||[])[1];
-    const motor=(seg.match(/motor\s*:?\s*([A-Z0-9]{6,})/i)||[])[1];
-    const model=(seg.match(/\]\s*([A-Za-z0-9\- ]{3,40}?)(?=\s+(?:Color|NIV|Serie|Motor|\d{2,3}\s?V|\$|$))/i)||[])[1];
-    const col=(seg.match(COLRE)||[''])[0].toUpperCase().replace(/\s*\/\s*/g,'/');
-    const pm=seg.match(/([A-ZÁÉÍÓÚÑ][A-Z0-9ÁÉÍÓÚÑ .]*?\d{2,3}\s?V[^–—$]*?)\s[–—-]\s*([A-ZÁÉÍÓÚÑ\/ ]+)/i);
-    const fb=pm?splitProd(pm[1]+' - '+pm[2]):{modelo:'',color:''};
-    V.push({cant:num(qty)||1,modelo:((model||fb.modelo)||'').trim(),color:col||fb.color,serie:m[0],motor:motor||'',volt:volt?volt+'V':'',precio:num(price)});
+    const end=m.index+17,nextS=i<nv.length-1?nv[i+1].index:t.length;
+    const before=money.filter(x=>x.index<m.index).pop();
+    const after=money.find(x=>x.index>=end&&x.index<nextS);
+    const lo=before?before.index+before[0].length:Math.max(0,m.index-300);
+    const hi=after?after.index+after[0].length:Math.min(nextS,end+300);
+    const seg=t.slice(lo,hi);
+    let modelo=lbl(seg,'MODELO'),color=lbl(seg,'COLOR').toUpperCase().replace(/\s*\/\s*/g,'/');
+    let motor=(lbl(seg,'MOTOR').match(/[A-Z0-9]{6,}/i)||[''])[0].toUpperCase();
+    let volt=(lbl(seg,'VOLTAJE').match(/(\d{2,3})\s?V/i)||[])[1];volt=volt?volt+'V':'';
+    if(!color)color=(seg.match(COLRE)||[''])[0].toUpperCase();
+    if(!motor)motor=((seg.match(/motor\s*:?\s*([A-Z0-9]{6,})/i)||[])[1]||'').toUpperCase();
+    if(!volt){const x=seg.match(/(\d{2,3})\s?V(?:olts?)?\b/i);volt=x?x[1]+'V':''}
+    if(!modelo){const pm=seg.match(/([A-ZÁÉÍÓÚÑ][A-Z0-9ÁÉÍÓÚÑ .]*?\d{2,3}\s?V[^–—$]*?)\s[–—-]\s*([A-ZÁÉÍÓÚÑ\/ ]+)/i);if(pm){const r=splitProd(pm[1]+' - '+pm[2]);modelo=r.modelo;if(!color)color=r.color}}
+    const qty=(seg.match(/(\d+(?:\.\d+)?)\s+[A-Z]{2,4}\s*-\s*[A-Za-zÁÉÍÓÚáéíóú]+/)||seg.match(/(\d+(?:\.\d+)?)\s*(?:Unidad|Unidades|Pza|Piezas?)/i)||[])[1];
+    const price=after?after[1]:(before?before[1]:0);
+    V.push({cant:num(qty)||1,modelo,color,serie:m[0],motor,volt,precio:num(price)});
   });
+  if(HOJA_TXT&&V.length)parseHoja(HOJA_TXT);
   rT();
+}
+
+/* ---------- Comprobante de pago: fecha, monto y banco ---------- */
+const MES={ene:1,feb:2,mar:3,abr:4,may:5,jun:6,jul:7,ago:8,sep:9,set:9,oct:10,nov:11,dic:12};
+const BANCOS=['BBVA','BANORTE','SANTANDER','HSBC','CITIBANAMEX','BANAMEX','SCOTIABANK','INBURSA','BANCO AZTECA','BANCOPPEL','BANREGIO','MERCADO PAGO','BANBAJIO','AFIRME'];
+function parsePago(raw){
+  const t=raw.replace(/\s+/g,' '),c=[];
+  const ok=(mo,d)=>mo>=1&&mo<=12&&d>=1&&d<=31;
+  for(const m of t.matchAll(/\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})\b/g))if(ok(+m[2],+m[1]))c.push({i:m.index,d:[m[3],m[2],m[1]]});
+  for(const m of t.matchAll(/\b(\d{4})-(\d{2})-(\d{2})\b/g))if(ok(+m[2],+m[3]))c.push({i:m.index,d:[m[1],m[2],m[3]]});
+  for(const m of t.matchAll(/\b(\d{1,2})[\s\/\-.]*(?:de\s+|del\s+)?([a-záéíóú]{3,10})\.?[\s\/\-.]*(?:de\s+|del\s+)?(\d{4})\b/gi)){const k=MES[norm(m[2]).slice(0,3)];if(k&&ok(k,+m[1]))c.push({i:m.index,d:[m[3],k,m[1]]})}
+  c.sort((a,b)=>a.i-b.i);
+  const fl=t.search(/fecha/i),pick=c.find(x=>fl>=0&&x.i>=fl)||c[0];
+  const fecha=pick?`${pick.d[0]}-${String(pick.d[1]).padStart(2,'0')}-${String(pick.d[2]).padStart(2,'0')}`:'';
+  let mm=[...t.matchAll(/\$\s*(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)/g)].map(x=>({v:num(x[1]),i:x.index})).filter(x=>x.v>0);
+  if(!mm.length)mm=[...t.matchAll(/\b(\d{1,3}(?:,\d{3})*\.\d{2})\b/g)].map(x=>({v:num(x[1]),i:x.index})).filter(x=>x.v>0);
+  const lab=mm.filter(x=>/monto|importe|enviaste|cantidad|total|efectivo|cargo/i.test(t.slice(Math.max(0,x.i-45),x.i)));
+  const pool=lab.length?lab:mm,cnt={};pool.forEach(x=>cnt[x.v]=(cnt[x.v]||0)+1);
+  let monto=0,best=0;for(const x of pool)if(cnt[x.v]>best){best=cnt[x.v];monto=x.v}
+  const up=t.toUpperCase(),has=(b,s)=>new RegExp('\\b'+b+'\\b').test(s);
+  const find=s=>BANCOS.find(b=>has(b,s.toUpperCase()))||'';
+  let banco='';
+  const rl=t.match(/banco\s+(?:receptor|destino)\s*:?\s*([A-Za-zÁÉÍÓÚÑ0-9 ]{3,30}?)(?=\s+(?:Nombre|Cuenta|N[uú]mero|Clave|Concepto|Referencia)\b|$)/i);
+  if(rl)banco=find(rl[1])||rl[1].trim().toUpperCase();
+  if(!banco){const ev=t.match(/EVOBIKE[\s\S]{0,40}/i);if(ev)banco=find(ev[0])}
+  if(!banco)banco=find(t);
+  return {fecha,monto,banco};
+}
+async function leerPago(f){
+  let txt='';
+  if(ext(f)==='pdf')txt=await pdfText(f);
+  else{say('s_pago','Leyendo imagen con OCR…');txt=(await Tesseract.recognize(f,'spa')).data.text}
+  const r=parsePago(txt);
+  if(!r.monto&&!r.fecha){say('s_pago','No se detectó fecha ni monto; captúralos en la tabla de pagos.',1);return}
+  let row=P.find(x=>x.monto&&Math.abs(x.monto-r.monto)<0.01)||P.find(x=>!x.monto&&!x.fecha);
+  if(!row){row={fecha:'',monto:0,banco:''};P.push(row)}
+  if(!row.fecha)row.fecha=r.fecha;if(!row.monto)row.monto=r.monto;if(!row.banco)row.banco=r.banco;
+  rT();say('s_pago',`Comprobante leído: ${r.fecha||'sin fecha'}, ${r.monto?money(r.monto):'sin monto'}${r.banco?', '+r.banco:''}. Verifica la tabla de pagos.`);
 }
 
 /* ---------- Hoja de entrega: modelo, color, serie y motor ---------- */
@@ -159,12 +208,12 @@ const fixVin=x=>x.toUpperCase().replace(/O/g,'0').replace(/Q/g,'0').replace(/I/g
 let partial=false;
 function parseHoja(raw){
   const t=raw.replace(/[|\n\r]+/g,' ').replace(/\s+/g,' ');
-  const re=/(?:\b\d{1,2}|\b[Il])\s+([A-ZÁÉÍÓÚÑ0-9][A-ZÁÉÍÓÚÑ0-9 .\/–—~-]{3,90}?)\s+([A-Z0-9]{17})\s+(\d{6,12})\b/gi;
-  let n=0;partial=false;
+  const re=/(?:\b\d{1,2}|\b[Il])\s+([A-ZÁÉÍÓÚÑ0-9][A-ZÁÉÍÓÚÑ0-9 .\/–—~-]{3,90}?)\s+([A-Z0-9]{17})\s+([A-Z0-9]{6,20})\b/gi;
+  let n=0;partial=false;const hadV=V.length>0;
   for(const m of t.matchAll(re)){
     const pr=splitProd(m[1]),serie=fixVin(m[2]),motor=m[3];
     let v=V.find(x=>x.serie.toUpperCase()===serie)||V.find(x=>!x.serie);
-    if(!v){v={cant:1,modelo:'',color:'',serie:'',motor:'',volt:'',precio:0};V.push(v)}
+    if(!v){if(hadV)continue;v={cant:1,modelo:'',color:'',serie:'',motor:'',volt:'',precio:0};V.push(v)}
     if(!v.serie)v.serie=serie;
     if(!v.modelo)v.modelo=pr.modelo;
     if(!v.color)v.color=pr.color;
@@ -179,7 +228,7 @@ function parseHoja(raw){
       if(!m)continue;
       const pr=splitProd(m[1]+' - '+((m[2].match(COLX)||[''])[0]));
       let v=V.find(x=>!x.modelo);
-      if(!v){v={cant:1,modelo:'',color:'',serie:'',motor:'',volt:'',precio:0};V.push(v)}
+      if(!v){if(hadV)continue;v={cant:1,modelo:'',color:'',serie:'',motor:'',volt:'',precio:0};V.push(v)}
       v.modelo=pr.modelo;if(!v.color)v.color=pr.color;if(!v.volt)v.volt=pr.volt;n++;
     }
     if(n)partial=true;
@@ -193,7 +242,7 @@ async function leerHoja(f){
     say('s_hoja','Leyendo imagen con OCR (puede tardar unos segundos)…');
     const r=await Tesseract.recognize(f,'spa');txt=r.data.text;
   }
-  const n=parseHoja(txt);
+  HOJA_TXT=txt;const n=parseHoja(txt);
   say('s_hoja',n?(partial?`Hoja leída: modelo y color detectados (${n}). La serie y el motor no se leyeron con claridad: captúralos o verifícalos en la tabla.`:`Hoja leída: ${n} unidad(es) con modelo/serie/motor. Revisa la tabla.`):'No se encontraron unidades en la hoja; captura los datos manualmente.',!n);
 }
 
@@ -205,7 +254,8 @@ async function onFile(k,el){
     if(k==='csf'&&ext(f)==='pdf'){parseCSF(await pdfText(f));say('s_csf','CSF leída. Revisa los campos.')}
     else if(k==='csf')say('s_csf','Imagen cargada: captura los datos fiscales manualmente.');
     if(k==='hoja')await leerHoja(f);
-    if(k==='pre'){parsePre(await pdfText(f));say('s_pre',`Prefactura leída: ${V.length} unidad(es), ${P.length} pago(s). Revisa las tablas.`)}
+    if(k==='pago')await leerPago(f);
+    if(k==='pre'){parsePre(await pdfText(f));say('s_pre',`Prefactura leída: ${V.length} unidad(es), ${P.length} pago(s).`+(P.length?'':' No trae líneas de pago: cárgalos desde el comprobante o captúralos.')+' Revisa las tablas.')}
   }catch(e){say('s_'+k,'No se pudo leer el archivo: '+e.message,1)}
 }
 
