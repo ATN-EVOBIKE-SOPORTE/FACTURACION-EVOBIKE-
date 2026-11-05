@@ -28,9 +28,9 @@
     <h2 class="font-semibold mb-3">1. Documentos</h2>
     <div class="grid md:grid-cols-2 gap-4">
       <div><label class="lb">Constancia de Situación Fiscal (PDF, JPG, PNG)</label><input type="file" accept=".pdf,.jpg,.jpeg,.png" class="in" onchange="onFile('csf',this)"><p id="s_csf" class="text-xs text-slate-500 mt-1"></p></div>
-      <div><label class="lb">Prefactura / Nota de venta (PDF)</label><input type="file" accept=".pdf" class="in" onchange="onFile('pre',this)"><p id="s_pre" class="text-xs text-slate-500 mt-1"></p></div>
+      <div><label class="lb">Prefactura(s) / Nota(s) de venta (PDF, puedes agregar varias)</label><input type="file" multiple accept=".pdf" class="in" onchange="addFiles('pre',this)"><ul id="l_pre" class="text-xs text-slate-700 mt-1 space-y-0.5"></ul><p id="s_pre" class="text-xs text-slate-500 mt-1"></p></div>
       <div><label class="lb">Comprobante de pago (PDF, JPG, PNG)</label><input type="file" accept=".pdf,.jpg,.jpeg,.png" class="in" onchange="onFile('pago',this)"><p id="s_pago" class="text-xs text-slate-500 mt-1"></p></div>
-      <div><label class="lb">Hoja de entrega firmada (PDF, JPG, PNG)</label><input type="file" accept=".pdf,.jpg,.jpeg,.png" class="in" onchange="onFile('hoja',this)"><p id="s_hoja" class="text-xs text-slate-500 mt-1"></p></div>
+      <div><label class="lb">Hoja(s) de entrega firmada(s) (PDF, JPG, PNG, puedes agregar varias)</label><input type="file" multiple accept=".pdf,.jpg,.jpeg,.png" class="in" onchange="addFiles('hoja',this)"><ul id="l_hoja" class="text-xs text-slate-700 mt-1 space-y-0.5"></ul><p id="s_hoja" class="text-xs text-slate-500 mt-1"></p></div>
       <div><label class="lb">Factura de anticipo (opcional, PDF)</label><input type="file" accept=".pdf" class="in" onchange="onFile('fant',this)"><p id="s_fant" class="text-xs text-slate-500 mt-1"></p></div>
     </div>
     <div class="mt-4"><label class="lb">Endpoint de Google Apps Script (Web App URL) para validar duplicados</label>
@@ -86,7 +86,7 @@
 <script>
 pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 const $=id=>document.getElementById(id);
-const FILES={};
+const FILES={pre:[],hoja:[]};
 const V=[],P=[];
 const setF=(k,v)=>{const e=$('f_'+k);if(e)e.value=v||''};
 const say=(id,t,err)=>{$(id).textContent=t;$(id).className='text-xs mt-1 '+(err?'text-red-600':'text-slate-500')};
@@ -141,11 +141,10 @@ const COLRE=new RegExp(`\\b${COL}(?:\\s*/\\s*${COL})?\\b`,'i');
 const STOP='MARCA|MODELO|NIV|MOTOR|COLOR|WATTS|VOLTAJE|BATERIA|BATERÍA|ADUANA|FECHA PEDIMENTO';
 const lbl=(seg,n)=>{const m=seg.match(new RegExp('\\b'+n+'\\s*:\\s*(.+?)(?=\\s+(?:'+STOP+')\\s*:|$)','i'));return m?m[1].trim():''};
 let HOJA_TXT='';
-function parsePre(t){
-  $('nota').value=(t.match(/\bS\d{4,6}\b/)||[''])[0];
+function parsePreDoc(t){
+  const nota=(t.match(/\bS\d{4,6}\b/)||[''])[0];
   const pagos=[...t.matchAll(/Pagad[oa]\s+(?:el|en)?\s*(\d{2})\/(\d{2})\/(\d{4})\s*\$?\s*([\d,]+\.\d{2})/gi)].map(m=>({fecha:`${m[3]}-${m[2]}-${m[1]}`,monto:num(m[4]),banco:''}));
-  if(pagos.length){P.length=0;P.push(...pagos)}
-  V.length=0;
+  const vs=[];
   let nv=[...t.matchAll(/\bNIV\s*:\s*([A-HJ-NPR-Z0-9]{17})\b/gi)].map(m=>{const x=[m[1].toUpperCase()];x.index=m.index+m[0].length-17;return x});
   if(!nv.length)nv=[...t.matchAll(/\b[A-HJ-NPR-Z0-9]{17}\b/g)].filter(m=>/\d/.test(m[0])&&/[A-Z]/.test(m[0])&&!/MOTOR\s*:?\s*$/i.test(t.slice(Math.max(0,m.index-12),m.index)));
   const money=[...t.matchAll(/\$\s?([\d,]+\.\d{2})/g)].filter(x=>!/Pagad[oa][^$]{0,25}$/i.test(t.slice(Math.max(0,x.index-40),x.index)));
@@ -165,10 +164,9 @@ function parsePre(t){
     if(!modelo){const pm=seg.match(/([A-ZÁÉÍÓÚÑ][A-Z0-9ÁÉÍÓÚÑ .]*?\d{2,3}\s?V[^–—$]*?)\s[–—-]\s*([A-ZÁÉÍÓÚÑ\/ ]+)/i);if(pm){const r=splitProd(pm[1]+' - '+pm[2]);modelo=r.modelo;if(!color)color=r.color}}
     const qty=(seg.match(/(\d+(?:\.\d+)?)\s+[A-Z]{2,4}\s*-\s*[A-Za-zÁÉÍÓÚáéíóú]+/)||seg.match(/(\d+(?:\.\d+)?)\s*(?:Unidad|Unidades|Pza|Piezas?)/i)||[])[1];
     const price=after?after[1]:(before?before[1]:0);
-    V.push({cant:num(qty)||1,modelo,color,serie:m[0],motor,volt,precio:num(price)});
+    vs.push({cant:num(qty)||1,modelo:normModelo(modelo),color,serie:m[0],motor,volt,precio:num(price)});
   });
-  if(HOJA_TXT&&V.length)parseHoja(HOJA_TXT);
-  rT();
+  return {nota,V:vs,pagos};
 }
 
 /* ---------- Comprobante de pago: fecha, monto y banco ---------- */
@@ -211,19 +209,32 @@ async function leerPago(f){
 
 /* ---------- Hoja de entrega: modelo, color, serie y motor ---------- */
 const SEP=/\s[–—~-]\s/;
+/* Modelo limpio: MAYUSCULAS, sin acentos, sin año, sin voltaje/amperaje/"Base" ni caracteres extra */
+function normModelo(x){
+  return String(x||'').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/\b(?:19|20)\d{2}\b/g,' ')
+    .replace(/\b\d{2,3}\s?V(?:OLTS?)?\b/g,' ')
+    .replace(/\b\d+(?:\.\d+)?\s?AH\b/g,' ')
+    .replace(/[^A-Z0-9 \-]/g,' ')
+    .replace(/\s+/g,' ').trim()
+    .replace(/\s*\bBASE$/,'')
+    .replace(/^[\s-]+|[\s-]+$/g,'').replace(/\s+/g,' ').trim();
+}
 function splitProd(t){
   const parts=t.trim().split(SEP);
   const color=parts.length>1?parts.pop().trim().toUpperCase().replace(/\s*\/\s*/g,'/'):'';
-  const modelo=parts.join(' - ').replace(/\s+/g,' ').trim();
-  return {modelo,color,volt:((modelo.match(/(\d{2,3})\s?V\b/i)||[])[1]||'')&&(modelo.match(/(\d{2,3})\s?V\b/i)[1]+'V')};
+  const raw=parts.join(' - ').replace(/\s+/g,' ').trim();
+  const vm=raw.match(/(\d{2,3})\s?V\b/i);
+  return {modelo:normModelo(raw),color,volt:vm?vm[1]+'V':''};
 }
 const fixVin=x=>x.toUpperCase().replace(/O/g,'0').replace(/Q/g,'0').replace(/I/g,'1');
 let partial=false;
-function parseHoja(raw){
+function parseHoja(raw,allow){
   const t=raw.replace(/[|\n\r]+/g,' ').replace(/\s+/g,' ');
   const re=/(?:\b\d{1,2}|\b[Il])\s+([A-ZÁÉÍÓÚÑ0-9][A-ZÁÉÍÓÚÑ0-9 .\/–—~-]{3,90}?)\s+([A-Z0-9]{17})\s+([A-Z0-9]{6,20})\b/gi;
-  let n=0;partial=false;const hadV=V.length>0;
+  let n=0;partial=false;const hadV=allow===undefined?V.length>0:!allow;
   for(const m of t.matchAll(re)){
+    n++;
     const pr=splitProd(m[1]),serie=fixVin(m[2]),motor=m[3];
     let v=V.find(x=>x.serie.toUpperCase()===serie)||V.find(x=>!x.serie);
     if(!v){if(hadV)continue;v={cant:1,modelo:'',color:'',serie:'',motor:'',volt:'',precio:0};V.push(v)}
@@ -232,31 +243,74 @@ function parseHoja(raw){
     if(!v.color)v.color=pr.color;
     if(!v.motor)v.motor=motor;
     if(!v.volt)v.volt=pr.volt;
-    n++;
   }
   if(!n&&/\n[\s\S]*\n/.test(raw)){
     const COLX=new RegExp(`^(${COL}(?:\\s*/\\s*${COL})?(?:\\s+(?:PASTEL|CLARO|OSCURO|METALICO))?|[A-ZÁÉÍÓÚÑ]+)`,'i');
     for(const ln of raw.split(/\n/)){
       const m=ln.replace(/[|]/g,' ').match(/(?:^|\s)(?:\d{1,2}\s+|[Il]\s+)?([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ0-9 .]*?\d{2,3}\s?V[A-Za-z0-9 .]*?)\s[–—~-]\s(.+)$/i);
       if(!m)continue;
+      n++;
       const pr=splitProd(m[1]+' - '+((m[2].match(COLX)||[''])[0]));
       let v=V.find(x=>!x.modelo);
       if(!v){if(hadV)continue;v={cant:1,modelo:'',color:'',serie:'',motor:'',volt:'',precio:0};V.push(v)}
-      v.modelo=pr.modelo;if(!v.color)v.color=pr.color;if(!v.volt)v.volt=pr.volt;n++;
+      v.modelo=pr.modelo;if(!v.color)v.color=pr.color;if(!v.volt)v.volt=pr.volt;
     }
     if(n)partial=true;
   }
   rT();return n;
 }
-async function leerHoja(f){
-  let txt='';
-  if(ext(f)==='pdf')txt=await pdfText(f);
-  else{
-    say('s_hoja','Leyendo imagen con OCR (puede tardar unos segundos)…');
-    const r=await Tesseract.recognize(f,'spa');txt=r.data.text;
+const TXT=new Map(),PREINFO=new Map(),HOJA_APPLIED=new Set();
+let PRE_V=0,HOJA_N=0,HOJA_PART=false;
+async function textOf(f){
+  if(!TXT.has(f)){
+    let t;
+    if(ext(f)==='pdf')t=await pdfText(f);
+    else{say('s_hoja',`Leyendo ${f.name} con OCR (puede tardar unos segundos)…`);t=(await Tesseract.recognize(f,'spa')).data.text}
+    TXT.set(f,t);
   }
-  HOJA_TXT=txt;const n=parseHoja(txt);
-  say('s_hoja',n?(partial?`Hoja leída: modelo y color detectados (${n}). La serie y el motor no se leyeron con claridad: captúralos o verifícalos en la tabla.`:`Hoja leída: ${n} unidad(es) con modelo/serie/motor. Revisa la tabla.`):'No se encontraron unidades en la hoja; captura los datos manualmente.',!n);
+  return TXT.get(f);
+}
+function renderList(k){
+  $('l_'+k).innerHTML=FILES[k].map((f,i)=>`<li class="flex items-center justify-between gap-2"><span class="truncate">${i+1}. ${f.name.replace(/</g,'&lt;')}</span><button class="text-red-600 font-semibold" onclick="rmFile('${k}',${i})">Quitar</button></li>`).join('');
+}
+async function addFiles(k,el){
+  for(const f of el.files)if(!FILES[k].some(x=>x.name===f.name&&x.size===f.size))FILES[k].push(f);
+  el.value='';renderList(k);
+  if(k==='pre')await recompute();else await aplicarHojas();
+}
+async function rmFile(k,i){FILES[k].splice(i,1);renderList(k);await recompute()}
+/* Relee todas las prefacturas (las unidades se suman) y luego aplica las hojas */
+async function recompute(){
+  try{
+    V.length=0;HOJA_APPLIED.clear();PRE_V=0;HOJA_N=0;HOJA_PART=false;
+    if(FILES.pre.length){
+      const notas=[],seen=new Set(),pagos=[];
+      for(const f of FILES.pre){
+        const d=parsePreDoc(await textOf(f));PREINFO.set(f,d.nota);
+        if(d.nota&&!notas.includes(d.nota))notas.push(d.nota);
+        for(const v of d.V)if(!v.serie||!seen.has(v.serie)){seen.add(v.serie);V.push(v)}
+        pagos.push(...d.pagos);
+      }
+      PRE_V=V.length;
+      if(notas.length)$('nota').value=notas.join(', ');
+      if(pagos.length){P.length=0;P.push(...pagos)}
+      say('s_pre',`${FILES.pre.length} prefactura(s) leída(s): ${V.length} unidad(es), ${pagos.length} pago(s).`+(pagos.length?'':' No traen líneas de pago: cárgalos desde el comprobante o captúralos.')+' Revisa las tablas.');
+    }else say('s_pre','');
+    rT();await aplicarHojas();
+  }catch(e){say('s_pre','No se pudo leer: '+e.message,1)}
+}
+/* Aplica solo las hojas nuevas: completa campos vacíos y no pisa lo que ya editaste */
+async function aplicarHojas(){
+  try{
+    for(const f of FILES.hoja){
+      if(HOJA_APPLIED.has(f))continue;
+      const t=await textOf(f);HOJA_APPLIED.add(f);
+      HOJA_N+=parseHoja(t,PRE_V===0);HOJA_PART=HOJA_PART||partial;
+    }
+    rT();
+    if(!FILES.hoja.length)say('s_hoja','');
+    else say('s_hoja',HOJA_N?`${FILES.hoja.length} hoja(s) leída(s): ${HOJA_N} unidad(es) con datos.`+(HOJA_PART?' La serie o el motor de alguna no se leyó con claridad: verifícalos en la tabla.':' Revisa la tabla.'):'No se encontraron unidades en las hojas; captura los datos manualmente.',!HOJA_N);
+  }catch(e){say('s_hoja','No se pudo leer: '+e.message,1)}
 }
 
 /* ---------- Factura de anticipo (opcional) ---------- */
@@ -307,10 +361,8 @@ async function onFile(k,el){
   try{
     if(k==='csf'&&ext(f)==='pdf'){parseCSF(await pdfText(f));say('s_csf','CSF leída. Revisa los campos.')}
     else if(k==='csf')say('s_csf','Imagen cargada: captura los datos fiscales manualmente.');
-    if(k==='hoja')await leerHoja(f);
     if(k==='fant')await leerFactAnt(f);
     if(k==='pago')await leerPago(f);
-    if(k==='pre'){parsePre(await pdfText(f));say('s_pre',`Prefactura leída: ${V.length} unidad(es), ${P.length} pago(s).`+(P.length?'':' No trae líneas de pago: cárgalos desde el comprobante o captúralos.')+' Revisa las tablas.')}
   }catch(e){say('s_'+k,'No se pudo leer el archivo: '+e.message,1)}
 }
 
@@ -321,7 +373,7 @@ const delV=i=>{V.splice(i,1);rT()},delP=i=>{P.splice(i,1);rT()};
 function rT(){
   $('tv').innerHTML=V.map((v,i)=>`<tr>
     <td class="pr-1 pb-1 w-20"><input class="in" type="number" min="1" value="${v.cant}" oninput="V[${i}].cant=num(this.value)"></td>
-    ${['modelo','color','serie','motor','volt'].map(k=>`<td class="pr-1 pb-1"><input class="in" value="${String(v[k]).replace(/"/g,'&quot;')}" oninput="V[${i}].${k}=this.value"></td>`).join('')}
+    ${['modelo','color','serie','motor','volt'].map(k=>`<td class="pr-1 pb-1"><input class="in" value="${String(v[k]).replace(/"/g,'&quot;')}" oninput="V[${i}].${k}=this.value"${k==='modelo'?` onchange="V[${i}].modelo=normModelo(this.value);this.value=V[${i}].modelo"`:''}></td>`).join('')}
     <td class="pr-1 pb-1 w-36"><input class="in" type="number" step="0.01" value="${v.precio}" oninput="V[${i}].precio=num(this.value)"></td>
     <td class="pb-1"><button class="btn bg-red-600 text-white" onclick="delV(${i})">Eliminar</button></td></tr>`).join('');
   $('tp').innerHTML=P.map((p,i)=>`<tr>
@@ -371,13 +423,13 @@ function fillMachote(wb,d){
   ws.getCell('AV2').value={formula:'AQ2-AT2',result:sumP-sumM};
   ws.getCell('AW2').value={formula:'AT2',result:sumM};
   ws.getCell('AA2').value={formula:'AW2',result:sumM};
-  d.V.forEach((v,i)=>{const r=i+2;put('AJ'+r,v.cant);put('AK'+r,v.modelo);put('AL'+r,v.color);put('AM'+r,v.serie);put('AN'+r,v.motor);put('AO'+r,v.volt);put('AP'+r,v.precio)});
+  d.V.forEach((v,i)=>{const r=i+2;put('AJ'+r,v.cant);put('AK'+r,normModelo(v.modelo));put('AL'+r,v.color);put('AM'+r,v.serie);put('AN'+r,v.motor);put('AO'+r,v.volt);put('AP'+r,v.precio)});
   d.P.forEach((p,i)=>{const r=i+2;put('AR'+r,p.fecha);put('AS'+r,p.monto);put('AU'+r,p.banco)});
 }
 async function buildXlsx(nota){
   const g=id=>$(id).value.trim();
   const wb=await loadMachote();
-  fillMachote(wb,{V,P,nota,razon:g('f_razon'),rfc:g('f_rfc'),regimen:$('f_regimen').value,uso:$('f_uso').value,metodo:$('f_metodo').value,mail:g('f_mail'),
+  fillMachote(wb,{V,P,nota:g('nota'),razon:g('f_razon'),rfc:g('f_rfc'),regimen:$('f_regimen').value,uso:$('f_uso').value,metodo:$('f_metodo').value,mail:g('f_mail'),
     fecha:new Date().toLocaleDateString('sv-SE'),tienda:g('tienda'),pedido:g('pedido'),vendedor:g('vendedor'),salida:g('salida'),obs:g('obs')});
   return await wb.xlsx.writeBuffer();
 }
@@ -392,7 +444,7 @@ function zipName(){
 }
 function save(blob,name){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),4000)}
 async function descargar(){
-  const nota=clean($('nota').value),rfc=clean($('f_rfc').value);
+  const nota=clean($('nota').value.split(/[,;]/)[0]),rfc=clean($('f_rfc').value);
   if(!nota){return msg('Falta la nota de venta.',1)}
   if(!rfc){return msg('Falta el RFC del cliente.',1)}
   if(!V.length){return msg('Agrega al menos una unidad.',1)}
@@ -401,9 +453,9 @@ async function descargar(){
   try{
     const xl=await buildXlsx(nota),zip=new JSZip(),dir=zip.folder('EXPEDIENTE_'+nota);
     if(FILES.csf)dir.file(`CSF_${rfc}.${ext(FILES.csf)}`,FILES.csf);
-    if(FILES.pre)dir.file(`Prefactura_${nota}.pdf`,FILES.pre);
+    FILES.pre.forEach((f,i)=>dir.file(FILES.pre.length>1?`Prefactura_${clean(PREINFO.get(f)||nota)}_${i+1}.pdf`:`Prefactura_${nota}.pdf`,f));
     if(FILES.pago)dir.file(`ComprobantePago_${nota}.${ext(FILES.pago)}`,FILES.pago);
-    if(FILES.hoja)dir.file(`HojaEntregaFirmada_${nota}.${ext(FILES.hoja)}`,FILES.hoja);
+    FILES.hoja.forEach((f,i)=>dir.file(FILES.hoja.length>1?`HojaEntregaFirmada_${nota}_${i+1}.${ext(f)}`:`HojaEntregaFirmada_${nota}.${ext(f)}`,f));
     if(FILES.fant)dir.file(`FacturaAnticipo_${clean(FACT.folio||nota)}.${ext(FILES.fant)}`,FILES.fant);
     const xname=`FACTURACION_VENTA_DIARIA_${nota}.xlsx`;
     zip.file(xname,xl);
