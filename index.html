@@ -29,7 +29,7 @@
     <div class="grid md:grid-cols-2 gap-4">
       <div><label class="lb">Constancia de Situación Fiscal o INE (PDF, JPG, PNG)</label><input type="file" accept=".pdf,.jpg,.jpeg,.png" class="in" onchange="onFile('csf',this)"><div class="flex items-center gap-2 mt-1"><span class="text-xs text-slate-600">Tipo:</span><select id="idtype" class="in" style="width:auto" onchange="if(FILES.csf)leerId(FILES.csf)"><option value="auto">Detectar automáticamente</option><option value="csf">CSF</option><option value="ine">INE</option></select></div><p id="s_csf" class="text-xs text-slate-500 mt-1"></p></div>
       <div><label class="lb">Prefactura(s) / Nota(s) de venta (PDF, puedes agregar varias)</label><input type="file" multiple accept=".pdf" class="in" onchange="addFiles('pre',this)"><ul id="l_pre" class="text-xs text-slate-700 mt-1 space-y-0.5"></ul><p id="s_pre" class="text-xs text-slate-500 mt-1"></p></div>
-      <div><label class="lb">Comprobante de pago (PDF, JPG, PNG)</label><input type="file" accept=".pdf,.jpg,.jpeg,.png" class="in" onchange="onFile('pago',this)"><p id="s_pago" class="text-xs text-slate-500 mt-1"></p></div>
+      <div><label class="lb">Comprobante(s) de pago (PDF, JPG, PNG, puedes agregar varios)</label><input type="file" multiple accept=".pdf,.jpg,.jpeg,.png" class="in" onchange="addFiles('pago',this)"><ul id="l_pago" class="text-xs text-slate-700 mt-1 space-y-0.5"></ul><p id="s_pago" class="text-xs text-slate-500 mt-1"></p></div>
       <div><label class="lb">Hoja(s) de entrega firmada(s) (PDF, JPG, PNG, puedes agregar varias)</label><input type="file" multiple accept=".pdf,.jpg,.jpeg,.png" class="in" onchange="addFiles('hoja',this)"><ul id="l_hoja" class="text-xs text-slate-700 mt-1 space-y-0.5"></ul><p id="s_hoja" class="text-xs text-slate-500 mt-1"></p></div>
       <div><label class="lb">Factura de anticipo (opcional, PDF)</label><input type="file" accept=".pdf" class="in" onchange="onFile('fant',this)"><p id="s_fant" class="text-xs text-slate-500 mt-1"></p></div>
     </div>
@@ -86,7 +86,7 @@
 <script>
 pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 const $=id=>document.getElementById(id);
-const FILES={pre:[],hoja:[]};
+const FILES={pre:[],hoja:[],pago:[]};
 const V=[],P=[];
 const setF=(k,v)=>{const e=$('f_'+k);if(e)e.value=v||''};
 const say=(id,t,err)=>{$(id).textContent=t;$(id).className='text-xs mt-1 '+(err?'text-red-600':'text-slate-500')};
@@ -195,16 +195,31 @@ function parsePago(raw){
   if(!banco)banco=find(t);
   return {fecha,monto,banco};
 }
-async function leerPago(f){
-  let txt='';
-  if(ext(f)==='pdf')txt=await pdfText(f);
-  else{say('s_pago','Leyendo imagen con OCR…');txt=(await Tesseract.recognize(f,'spa')).data.text}
-  const r=parsePago(txt);
-  if(!r.monto&&!r.fecha){say('s_pago','No se detectó fecha ni monto; captúralos en la tabla de pagos.',1);return}
-  let row=P.find(x=>x.monto&&Math.abs(x.monto-r.monto)<0.01)||P.find(x=>!x.monto&&!x.fecha);
-  if(!row){row={fecha:'',monto:0,banco:''};P.push(row)}
-  if(!row.fecha)row.fecha=r.fecha;if(!row.monto)row.monto=r.monto;if(!row.banco)row.banco=r.banco;
-  rT();say('s_pago',`Comprobante leído: ${r.fecha||'sin fecha'}, ${r.monto?money(r.monto):'sin monto'}${r.banco?', '+r.banco:''}. Verifica la tabla de pagos.`);
+/* Cada comprobante aporta una fila de pago; completa filas de la prefactura con el mismo monto o crea una nueva */
+async function aplicarPagos(){
+  try{
+    for(const f of FILES.pago){
+      if(PAGO_APPLIED.has(f))continue;
+      const r=parsePago(await textOf(f,'s_pago'));PAGO_APPLIED.add(f);
+      if(!r.monto&&!r.fecha){PAGO_INFO.set(f,{row:null,r,created:false});continue}
+      let row=P.find(x=>!PAGO_CLAIMED.has(x)&&x.monto&&Math.abs(x.monto-r.monto)<0.01)||P.find(x=>!PAGO_CLAIMED.has(x)&&!x.monto&&!x.fecha),created=false;
+      if(!row){row={fecha:'',monto:0,banco:''};P.push(row);created=true}
+      if(!row.fecha)row.fecha=r.fecha;if(!row.monto)row.monto=r.monto;if(!row.banco)row.banco=r.banco;
+      PAGO_CLAIMED.add(row);PAGO_INFO.set(f,{row,r,created});
+    }
+    rT();resumenPagos();
+  }catch(e){say('s_pago','No se pudo leer: '+e.message,1)}
+}
+function resumenPagos(){
+  if(!FILES.pago.length){say('s_pago','');return}
+  let bad=false;
+  const L=FILES.pago.map((f,i)=>{const r=(PAGO_INFO.get(f)||{}).r;if(!r||(!r.monto&&!r.fecha)){bad=true;return `${i+1}) sin datos legibles`}return `${i+1}) ${r.fecha||'sin fecha'} · ${r.monto?money(r.monto):'sin monto'}${r.banco?' · '+r.banco:''}`});
+  say('s_pago',L.join('   ')+(bad?'. Captura en la tabla los que no se leyeron.':'. Verifica la tabla de pagos.'),bad);
+}
+function quitarPago(f){
+  const info=PAGO_INFO.get(f);
+  if(info&&info.row){PAGO_CLAIMED.delete(info.row);if(info.created){const i=P.indexOf(info.row);if(i>=0)P.splice(i,1)}}
+  PAGO_INFO.delete(f);PAGO_APPLIED.delete(f);rT();resumenPagos();
 }
 
 /* ---------- Hoja de entrega: modelo, color, serie y motor ---------- */
@@ -259,7 +274,7 @@ function parseHoja(raw,allow){
   }
   rT();return n;
 }
-const TXT=new Map(),PREINFO=new Map(),HOJA_APPLIED=new Set();
+const TXT=new Map(),PREINFO=new Map(),HOJA_APPLIED=new Set(),PAGO_APPLIED=new Set(),PAGO_CLAIMED=new Set(),PAGO_INFO=new Map();
 let PRE_V=0,HOJA_N=0,HOJA_PART=false;
 async function textOf(f,sid){
   if(!TXT.has(f)){
@@ -276,9 +291,9 @@ function renderList(k){
 async function addFiles(k,el){
   for(const f of el.files)if(!FILES[k].some(x=>x.name===f.name&&x.size===f.size))FILES[k].push(f);
   el.value='';renderList(k);
-  if(k==='pre')await recompute();else await aplicarHojas();
+  if(k==='pre')await recompute();else if(k==='pago')await aplicarPagos();else await aplicarHojas();
 }
-async function rmFile(k,i){FILES[k].splice(i,1);renderList(k);await recompute()}
+async function rmFile(k,i){const f=FILES[k].splice(i,1)[0];renderList(k);if(k==='pago')quitarPago(f);else await recompute()}
 /* Relee todas las prefacturas (las unidades se suman) y luego aplica las hojas */
 async function recompute(){
   try{
@@ -293,10 +308,10 @@ async function recompute(){
       }
       PRE_V=V.length;
       if(notas.length)$('nota').value=notas.join(', ');
-      if(pagos.length){P.length=0;P.push(...pagos)}
+      if(pagos.length){P.length=0;P.push(...pagos);PAGO_APPLIED.clear();PAGO_CLAIMED.clear();PAGO_INFO.clear()}
       say('s_pre',`${FILES.pre.length} prefactura(s) leída(s): ${V.length} unidad(es), ${pagos.length} pago(s).`+(pagos.length?'':' No traen líneas de pago: cárgalos desde el comprobante o captúralos.')+' Revisa las tablas.');
     }else say('s_pre','');
-    rT();await aplicarHojas();
+    rT();await aplicarHojas();await aplicarPagos();
   }catch(e){say('s_pre','No se pudo leer: '+e.message,1)}
 }
 /* Aplica solo las hojas nuevas: completa campos vacíos y no pisa lo que ya editaste */
@@ -390,7 +405,6 @@ async function onFile(k,el){
   try{
     if(k==='csf')await leerId(f);
     if(k==='fant')await leerFactAnt(f);
-    if(k==='pago')await leerPago(f);
   }catch(e){say('s_'+k,'No se pudo leer el archivo: '+e.message,1)}
 }
 
@@ -482,7 +496,7 @@ async function descargar(){
     const xl=await buildXlsx(nota),zip=new JSZip(),dir=zip.folder('EXPEDIENTE_'+nota);
     if(FILES.csf)dir.file(ID_TIPO==='ine'?`INE_${nota}.${ext(FILES.csf)}`:`CSF_${rfc}.${ext(FILES.csf)}`,FILES.csf);
     FILES.pre.forEach((f,i)=>dir.file(FILES.pre.length>1?`Prefactura_${clean(PREINFO.get(f)||nota)}_${i+1}.pdf`:`Prefactura_${nota}.pdf`,f));
-    if(FILES.pago)dir.file(`ComprobantePago_${nota}.${ext(FILES.pago)}`,FILES.pago);
+    FILES.pago.forEach((f,i)=>dir.file(FILES.pago.length>1?`ComprobantePago_${nota}_${i+1}.${ext(f)}`:`ComprobantePago_${nota}.${ext(f)}`,f));
     FILES.hoja.forEach((f,i)=>dir.file(FILES.hoja.length>1?`HojaEntregaFirmada_${nota}_${i+1}.${ext(f)}`:`HojaEntregaFirmada_${nota}.${ext(f)}`,f));
     if(FILES.fant)dir.file(`FacturaAnticipo_${clean(FACT.folio||nota)}.${ext(FILES.fant)}`,FILES.fant);
     const xname=`FACTURACION_VENTA_DIARIA_${nota}.xlsx`;
