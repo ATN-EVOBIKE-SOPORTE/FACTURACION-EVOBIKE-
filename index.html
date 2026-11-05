@@ -27,7 +27,7 @@
   <section class="bg-white rounded-lg shadow-sm p-5">
     <h2 class="font-semibold mb-3">1. Documentos</h2>
     <div class="grid md:grid-cols-2 gap-4">
-      <div><label class="lb">Constancia de Situación Fiscal (PDF, JPG, PNG)</label><input type="file" accept=".pdf,.jpg,.jpeg,.png" class="in" onchange="onFile('csf',this)"><p id="s_csf" class="text-xs text-slate-500 mt-1"></p></div>
+      <div><label class="lb">Constancia de Situación Fiscal o INE (PDF, JPG, PNG)</label><input type="file" accept=".pdf,.jpg,.jpeg,.png" class="in" onchange="onFile('csf',this)"><div class="flex items-center gap-2 mt-1"><span class="text-xs text-slate-600">Tipo:</span><select id="idtype" class="in" style="width:auto" onchange="if(FILES.csf)leerId(FILES.csf)"><option value="auto">Detectar automáticamente</option><option value="csf">CSF</option><option value="ine">INE</option></select></div><p id="s_csf" class="text-xs text-slate-500 mt-1"></p></div>
       <div><label class="lb">Prefactura(s) / Nota(s) de venta (PDF, puedes agregar varias)</label><input type="file" multiple accept=".pdf" class="in" onchange="addFiles('pre',this)"><ul id="l_pre" class="text-xs text-slate-700 mt-1 space-y-0.5"></ul><p id="s_pre" class="text-xs text-slate-500 mt-1"></p></div>
       <div><label class="lb">Comprobante de pago (PDF, JPG, PNG)</label><input type="file" accept=".pdf,.jpg,.jpeg,.png" class="in" onchange="onFile('pago',this)"><p id="s_pago" class="text-xs text-slate-500 mt-1"></p></div>
       <div><label class="lb">Hoja(s) de entrega firmada(s) (PDF, JPG, PNG, puedes agregar varias)</label><input type="file" multiple accept=".pdf,.jpg,.jpeg,.png" class="in" onchange="addFiles('hoja',this)"><ul id="l_hoja" class="text-xs text-slate-700 mt-1 space-y-0.5"></ul><p id="s_hoja" class="text-xs text-slate-500 mt-1"></p></div>
@@ -261,11 +261,11 @@ function parseHoja(raw,allow){
 }
 const TXT=new Map(),PREINFO=new Map(),HOJA_APPLIED=new Set();
 let PRE_V=0,HOJA_N=0,HOJA_PART=false;
-async function textOf(f){
+async function textOf(f,sid){
   if(!TXT.has(f)){
     let t;
     if(ext(f)==='pdf')t=await pdfText(f);
-    else{say('s_hoja',`Leyendo ${f.name} con OCR (puede tardar unos segundos)…`);t=(await Tesseract.recognize(f,'spa')).data.text}
+    else{say(sid||'s_hoja',`Leyendo ${f.name} con OCR (puede tardar unos segundos)…`);t=(await Tesseract.recognize(f,'spa')).data.text}
     TXT.set(f,t);
   }
   return TXT.get(f);
@@ -354,13 +354,41 @@ async function leerFactAnt(f){
   say('s_fant',`Factura ${d.folio||'(sin folio)'} leída${d.total?': '+money(d.total):''}. Completa solo los datos vacíos del cliente y se agregará al ZIP. No sustituye al comprobante de pago.`+(d.fragmentado?' El nombre no se pudo leer bien de este PDF: toma el de la CSF o captúralo.':''));
 }
 
+/* ---------- CSF o INE: si es INE el RFC es genérico ---------- */
+const RFC_GEN='XAXX010101000';
+let ID_TIPO='';
+function clasificarId(raw){
+  const t=norm(raw).toUpperCase().replace(/\s+/g,' ');
+  const c=t.replace(/ /g,'');
+  const ine=(c.match(/INSTITUTONACIONALELECTORAL|CREDENCIALPARAVOTAR|CLAVEDEELECTOR|\bINE\b|SECCION\d|ANODEREGISTRO/g)||[]).length+(/\bINE\b/.test(t)?1:0);
+  const csf=(c.match(/CONSTANCIADESITUACIONFISCAL|CEDULADEIDENTIFICACIONFISCAL|SERVICIODEADMINISTRACIONTRIBUTARIA|REGIMENESFISCALES|REGISTROFEDERALDECONTRIBUYENTES/g)||[]).length;
+  if(ine>csf)return 'ine';
+  if(csf>ine)return 'csf';
+  return '';
+}
+async function leerId(f){
+  try{
+    const txt=(await textOf(f,'s_csf')).replace(/\s+/g,' ');
+    let tipo=$('idtype').value;
+    if(tipo==='auto')tipo=clasificarId(txt)||(ext(f)==='pdf'?'csf':'');
+    ID_TIPO=tipo;
+    if(tipo==='ine'){
+      setF('rfc',RFC_GEN);
+      say('s_csf',`INE detectada: el RFC se asignó como genérico (${RFC_GEN}). Captura la razón social si hace falta.`);
+    }else if(tipo==='csf'){
+      parseCSF(txt);
+      const ok=$('f_rfc').value;
+      say('s_csf',ok?'CSF leída. Revisa los campos'+(ext(f)==='pdf'?'.':' (viene de una imagen: verifica el RFC y el nombre).'):'Se leyó el archivo pero no se encontró el RFC: captúralo manualmente.',!ok);
+    }else say('s_csf','No se pudo identificar si es INE o CSF. Elige el tipo en la lista.',1);
+  }catch(e){say('s_csf','No se pudo leer el archivo: '+e.message,1)}
+}
+
 /* ---------- Archivos ---------- */
 async function onFile(k,el){
-  const f=el.files[0];if(!f){delete FILES[k];if(k==='fant')FACT={};say('s_'+k,'');return}
+  const f=el.files[0];if(!f){delete FILES[k];if(k==='csf')ID_TIPO='';if(k==='fant')FACT={};say('s_'+k,'');return}
   FILES[k]=f;say('s_'+k,f.name);
   try{
-    if(k==='csf'&&ext(f)==='pdf'){parseCSF(await pdfText(f));say('s_csf','CSF leída. Revisa los campos.')}
-    else if(k==='csf')say('s_csf','Imagen cargada: captura los datos fiscales manualmente.');
+    if(k==='csf')await leerId(f);
     if(k==='fant')await leerFactAnt(f);
     if(k==='pago')await leerPago(f);
   }catch(e){say('s_'+k,'No se pudo leer el archivo: '+e.message,1)}
@@ -452,7 +480,7 @@ async function descargar(){
   if($('gas').value.trim()&&!(await validar())&&!confirm('Se detectaron duplicados. ¿Continuar de todas formas?'))return msg('Cancelado por duplicados.',1);
   try{
     const xl=await buildXlsx(nota),zip=new JSZip(),dir=zip.folder('EXPEDIENTE_'+nota);
-    if(FILES.csf)dir.file(`CSF_${rfc}.${ext(FILES.csf)}`,FILES.csf);
+    if(FILES.csf)dir.file(ID_TIPO==='ine'?`INE_${nota}.${ext(FILES.csf)}`:`CSF_${rfc}.${ext(FILES.csf)}`,FILES.csf);
     FILES.pre.forEach((f,i)=>dir.file(FILES.pre.length>1?`Prefactura_${clean(PREINFO.get(f)||nota)}_${i+1}.pdf`:`Prefactura_${nota}.pdf`,f));
     if(FILES.pago)dir.file(`ComprobantePago_${nota}.${ext(FILES.pago)}`,FILES.pago);
     FILES.hoja.forEach((f,i)=>dir.file(FILES.hoja.length>1?`HojaEntregaFirmada_${nota}_${i+1}.${ext(f)}`:`HojaEntregaFirmada_${nota}.${ext(f)}`,f));
